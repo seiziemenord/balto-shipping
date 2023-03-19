@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Choose Your Delivery Method</title>
+  <script src="delivery_methods.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="https://embed.sendcloud.sc/spp/1.0.0/api.min.js"></script>
+
+  <style>
+  .delivery-method-container {
+    width: 500px;
+  }
+
+  .delivery-method-row {
+    display: flex;
+    align-items: center;
+  }
+
+  .delivery-method-row input[type="radio"] {
+    margin-right: 10px;
+  }
+
+  .delivery-method-name {
+    flex-grow: 1;
+  }
+
+  .delivery-method-price {
+    margin-left: 10px;
+  }
+  </style>
+</head>
+<body>
+
+<div class="delivery-method-container">
+  <h1>Choose Your Delivery Method</h1>
+
+  <% if delivery_methods['pickup_point'] %>
+  <h2>Pick-up Points</h2>
+  <% delivery_methods['pickup_point'].each_with_index do |method, index| %>
+    <div class="delivery-method-row">
+      <input type="radio" name="delivery_method" id="pickup_method_<%= index %>" data-index="<%= index %>" value="pickup_point">
+      <span class="delivery-method-name"><%= method %></span>
+      <span class="delivery-method-price">
+        <% if subscription || (total_price >= 50) %>
+          Price: Free
+        <% else %>
+          Price: 2.9€
+        <% end %>
+      </span>
+    </div>
+    <br>
+    <button class="open-service-point-picker" id="open-service-point-picker-<%= index %>" data-api-key="<%= method == 'Chrono Relais' ? '503e609c6f0c44ddaba57038830d8c3d' : 'eu-central-1-0.1f89cf7b43984f48967e3429b3e403b6' %>" data-index="<%= index %>">Choose pick-up point</button>
+  <% end %>
+  <% end %>
+
+
+  <h2>Home Delivery</h2>
+  <% delivery_methods['home_delivery'].each_with_index do |method, index| %>
+    <% if !(method == "Chrono Relais" && total_weight > 20) %>
+      <div class="delivery-method-row">
+        <input type="radio" name="delivery_method" id="home_delivery_method_<%= index %>" data-index="<%= index %>" value="home_delivery">
+        <span class="delivery-method-name"><%= method %></span>
+        <span class="delivery-method-price">
+          <% if total_price >= 80 %>
+            <%= "Price: Free" %>
+          <% else %>
+            <% case method %>
+              <% when 'GLS', 'DPD' %>
+                <%= "Price: 3€" %>
+              <% when 'Chronopost' %>
+                <%= "Price: 5€" %>
+              <% when 'Colissimo' %>
+                <%= "Price: 7€" %>
+            <% end %>
+          <% end %>
+        </span>
+      </div>
+    <% end %>
+  <% end %>
+
+  <form action="/confirm" method="post">
+    <input type="hidden" name="selected_pickup_point" id="selected_pickup_point" value="">
+    <input type="hidden" name="selected_home_delivery" id="selected_home_delivery" value="">
+      <div id="servicePointResult"></div>
+  <div id="postNumberResultElement"></div>
+  </form>
+</div>
+
+<br>
+  <span id="code"></span>
+
+
+<script>
+
+const openServicePointPickerButton = document.querySelectorAll('.open-service-point-picker');
+
+openServicePointPickerButton.forEach((button) => {
+  button.style.display = 'none'; // hide all buttons by default
+});
+
+const deliveryMethodRadios = document.querySelectorAll('input[name="delivery_method"]');
+
+deliveryMethodRadios.forEach((radio) => {
+  radio.addEventListener('change', handleDeliveryMethodChange);
+});
+
+let lastCheckedDeliveryMethodRadio = null;
+
+// show/hide button for selected/unselected pick-up method or home delivery method
+function handleDeliveryMethodChange(event) {
+  const deliveryMethodRadio = event.target;
+  const methodIndex = deliveryMethodRadio.getAttribute('data-index');
+  const servicePointPickerButton = document.getElementById(`open-service-point-picker-${methodIndex}`);
+
+  if (lastCheckedDeliveryMethodRadio !== deliveryMethodRadio) {
+    openServicePointPickerButton.forEach((button) => {
+      button.style.display = 'none';
+    });
+  }
+
+  if (deliveryMethodRadio.checked && deliveryMethodRadio.value === 'pickup_point') {
+    servicePointPickerButton.style.display = 'inline-block';
+    const homeDeliveryRadios = document.querySelectorAll('input[name="delivery_method"][value="home_delivery"]');
+    homeDeliveryRadios.forEach((radio) => {
+      radio.checked = false;
+    });
+  } else {
+    servicePointPickerButton.style.display = 'none';
+  }
+
+  lastCheckedDeliveryMethodRadio = deliveryMethodRadio;
+
+  // add event listener to the button
+  servicePointPickerButton.addEventListener('click', openServicePointPicker);
+}
+
+// show button for the default selected pick-up method
+const defaultDeliveryMethodRadio = document.querySelector('input[name="delivery_method"]:checked');
+if (defaultDeliveryMethodRadio && defaultDeliveryMethodRadio.value === 'pickup_point') {
+  const defaultMethodIndex = defaultDeliveryMethodRadio.getAttribute('data-index');
+  const defaultServicePointPickerButton = document.getElementById(`open-service-point-picker-${defaultMethodIndex}`);
+  defaultServicePointPickerButton.style.display = 'inline-block';
+}
+
+const servicePointResultElement = document.getElementById('selected_pickup_point');
+
+function openServicePointPicker(event) {
+  const apiKey = event.target.getAttribute('data-api-key');
+  const address = '<%= session["address"] %>';
+  const city = '<%= session["city"] %>';
+  const postalCode = '<%= session["zipcode"] %>';
+
+  const options = {
+    apiKey: apiKey,
+    country: 'FR',
+    city: `${city}`,
+    language: 'fr-fr',
+    address: `${address}, ${postalCode}`,
+    radius: 5000,
+    postalCode: `${postalCode}`
+  };
+
+  sendcloud.servicePoints.open(options, successCallback, failureCallback);
+}
+
+/**
+ * Handles the selection of a service point.
+ *
+ * @param {ServicePoint} servicePoint
+ * @param {string} postNumber Used as `to_post_number` field in the Parcel creation API
+ */
+function successCallback(servicePoint, postNumber) {
+  servicePointResultElement.innerHTML = JSON.stringify(servicePoint, null, 2);
+
+  // Define resultPostNumberField here
+  const resultPostNumberField = document.getElementById('postNumberResultElement');
+  resultPostNumberField.innerText = postNumber || '—';
+      resultPostNumberField.innerHTML = '—';
+
+  document.body.classList.add('is-showing-api-result');
+  const code = servicePoint.code;
+  localStorage.setItem('code', code);
+  document.getElementById("code").innerHTML = code;
+
+  // Close the service point picker after a service point is selected
+  sendcloud.servicePoints.close();
+}
+
+/**
+ * Handles error events and closing the service point picker.
+ *
+ * @param {string[]} errors
+ */
+
+function failureCallback(errors) {
+  document.body.classList.remove('is-showing-api-result')
+  console.error('[Failure callback]', errors.join(', '))
+}
+
+</script>
+
+</body>
+</html>
